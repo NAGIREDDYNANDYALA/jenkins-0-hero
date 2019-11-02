@@ -1,0 +1,17 @@
+https://jenkins.io/doc/book/installing/
+
+sudo -i
+
+JENKINS_HOME=/home/$(whoami)/jenkins_home
+mkdir $JENKINS_HOME
+sudo chown -R 1000 $JENKINS_HOME
+
+sudo -i
+
+docker run -d -u root --rm -d -p 8080:8080 -p 50000:50000 -v /home/$(whoami)/jenkins_home:/var/jenkins_home -v /var/run/docker.sock:/var/run/docker.sock jenkinsci/blueocean --name my-jenkins
+
+#get the password
+sudo docker ps
+sudo docker logs  priceless_shannon
+
+

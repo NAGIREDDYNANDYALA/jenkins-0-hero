@@ -1,0 +1,9 @@
+sudo -i
+adduser jenkins
+passwd jenkins
+usermod -aG wheel jenkins
+
+#access
+su - jenkins
+#test root
+sudo ls -la /root
