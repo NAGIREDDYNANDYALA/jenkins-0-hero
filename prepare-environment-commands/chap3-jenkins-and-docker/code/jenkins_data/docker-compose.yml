@@ -1,0 +1,21 @@
+---
+networks
+  net ~
+services
+  jenkins
+    container_name jenkins
+    image jenkinsjenkins
+    networks
+      - net
+    ports
+      - 80808080
+    volumes
+      - $PWDjenkins_homevarjenkins_home
+  remote_host
+    container_name remote-host
+    image remote-host
+    build
+      context centos7
+    networks
+      - net
+version 3

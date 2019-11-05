@@ -1,0 +1,81 @@
+#create a new image 
+#Step 1 - Create Dockerfile inside a folder centos7, in jenkins-data
+-----------------------------------
+
+FROM centos
+
+RUN yum -y install openssh-server
+
+RUN useradd remote_user && \
+  echo 'remote_user:12345' | chpasswd && \
+  mkdir /home/remote_user/.ssh && \
+  chmod 700 /home/remote_user/.ssh
+
+COPY remote-key.pub /home/remote_user/.ssh/authorized_keys
+
+RUN chown remote_user:remote_user -R /home/remote_user/.ssh && \
+    chmod 600 /home/remote_user/.ssh/authorized_keys
+
+RUN /usr/bin/ssh-keygen -A
+EXPOSE 22
+RUN rm -rf /run/nologin
+CMD /usr/sbin/sshd -D
+
+-----------------------------------
+
+# Step 2 - Update docker-compose.yml
+---
+networks:
+  net: ~
+services:
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins
+    networks:
+      - net
+    ports:
+      - "8080:8080"
+    volumes:
+      - "$PWD/jenkins_home:/var/jenkins_home"
+  remote_host:
+    container_name: remote-host
+    image: remote-host
+    build:
+      context: centos7
+    networks:
+      - net
+version: "3"
+
+-------------
+# Step 3 - build image
+docker-compose build
+
+# Step 4 - Run the images to create containers
+docker-compose up -d
+
+#logs
+docker-compose logs
+
+#Step 5
+#connect to the jenkins container
+docker exec -it jenkin
+
+#From there, ssh the new container remote_host
+ssh remote_user@remote_host
+
+# Step 6: Connect to remote_host without password
+
+#From current host, folder centos7
+docker cp remote-key jenkins:/tmp/remote-key
+docker exec -it jenkins bash
+#From /tmp
+ssh -i remote-key remote_user@remote_host
+
+
+
+
+--- 
+#remove <none> images
+docker system prune
+
+#remove one image
