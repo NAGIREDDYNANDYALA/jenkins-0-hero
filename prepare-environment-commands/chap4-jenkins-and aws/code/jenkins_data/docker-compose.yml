@@ -1,0 +1,30 @@
+---
+networks:
+  net: ~
+services:
+  db_host:
+    container_name: db
+    environment:
+      - MYSQL_ROOT_PASSWORD=1234
+    image: "mysql:5.7"
+    networks:
+      - net
+    volumes:
+      - "$PWD/db_data:/var/lib/mysql"
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins
+    networks:
+      - net
+    ports:
+      - "8080:8080"
+    volumes:
+      - "$PWD/jenkins_home:/var/jenkins_home"
+  remote_host:
+    build:
+      context: centos7
+    container_name: remote-host
+    image: remote-host
+    networks:
+      - net
+version: "3"

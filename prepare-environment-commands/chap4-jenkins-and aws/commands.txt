@@ -1,0 +1,118 @@
+# Step 1 update docker compose to add a new mysql image
+#docker-compose.yml
+-----------------------------------
+networks:
+  net: ~
+services:
+  db_host:
+    container_name: db
+    environment:
+      - MYSQL_ROOT_PASSWORD=1234
+    image: "mysql:5.7"
+    networks:
+      - net
+    volumes:
+      - "$PWD/db_data:/var/lib/mysql"
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins
+    networks:
+      - net
+    ports:
+      - "8080:8080"
+    volumes:
+      - "$PWD/jenkins_home:/var/jenkins_home"
+  remote_host:
+    build:
+      context: centos7
+    container_name: remote-host
+    image: remote-host
+    networks:
+      - net
+version: "3"
+------------------------------------------
+
+# Step 1.2 - create the service container - Docker will download the image
+docker-compose up -d
+
+docker ps
+docker images
+
+ls -al to verify the volume folder is created
+
+#see the logs for the new container - use container name db
+docker logs -f db
+
+docker exec -ti db bash
+
+#connect as root
+root@94c57b5269ee:/# mysql -u root -p
+1234
+
+
+-----
+
+#Step 2
+Update Docker file to istall mysql client, aws client and pip for python
+This will install then in remote-host container
+---------------------------------------------
+FROM centos
+
+RUN yum -y install openssh-server openssh-clients
+
+RUN useradd remote_user && \
+  echo 'remote_user:12345' | chpasswd && \
+  mkdir /home/remote_user/.ssh && \
+  chmod 700 /home/remote_user/.ssh
+
+COPY remote-key.pub /home/remote_user/.ssh/authorized_keys
+
+RUN chown remote_user:remote_user -R /home/remote_user/.ssh && \
+    chmod 600 /home/remote_user/.ssh/authorized_keys
+
+RUN /usr/bin/ssh-keygen -A
+
+EXPOSE 22
+RUN rm -rf /run/nologin
+
+RUN yum -y install mysql
+
+RUN yum update -y && \
+    yum -y install python36 && \
+    pip3 install awscli --upgrade --user
+
+ENV PATH=~/.local/bin:$PATH
+CMD ["/usr/sbin/sshd", "-D", "-e"]
+
+--------------------------------------------------------------------- 
+#run these commands again
+docker-compose build
+docker-compose up -d
+
+#connect to your container remote-host
+docker exec -ti remote-host bash
+
+#Make sure you have MySQL and aws
+mysql --version
+aws --v
+
+---------------
+
+#Step 3
+# Create a database - Login inside remote-host container
+
+docker exec -ti remote-host bash
+mysql -u root -h db_host -p
+1234
+
+# Create db, table
+
+>show databases;
+>create database testdb;
+>use testdb;
+>create table info(name varchar(20), lastname varchar(20), age int(2));
+
+>show tables;
+>desc info;
+>insert into info values('Mehdi', 'Ahmed', 38);
+>select * from info;
