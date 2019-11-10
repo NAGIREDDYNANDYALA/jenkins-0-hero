@@ -71,9 +71,6 @@ docker exec -it jenkins bash
 #From /tmp
 ssh -i remote-key remote_user@remote_host
 
-
-
-
 --- 
 #remove <none> images
 docker system prune

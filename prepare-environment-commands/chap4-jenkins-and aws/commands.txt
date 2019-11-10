@@ -60,10 +60,11 @@ FROM centos
 
 RUN yum -y install openssh-server openssh-clients
 
-RUN useradd remote_user && \
+RUN useradd -s /bin/bash remote_user && \
   echo 'remote_user:12345' | chpasswd && \
   mkdir /home/remote_user/.ssh && \
-  chmod 700 /home/remote_user/.ssh
+  chmod 700 /home/remote_user/.ssh && \
+  usermod -aG wheel remote_user
 
 COPY remote-key.pub /home/remote_user/.ssh/authorized_keys
 
@@ -78,8 +79,10 @@ RUN rm -rf /run/nologin
 RUN yum -y install mysql
 
 RUN yum update -y && \
-    yum -y install python36 && \
-    pip3 install awscli --upgrade --user
+   yum -y install python36 && \
+   pip3 install awscli --upgrade
+
+RUN pip3 --no-cache-dir install --upgrade awscli
 
 ENV PATH=~/.local/bin:$PATH
 CMD ["/usr/sbin/sshd", "-D", "-e"]
@@ -116,3 +119,141 @@ mysql -u root -h db_host -p
 >desc info;
 >insert into info values('Mehdi', 'Ahmed', 38);
 >select * from info;
+
+--------------
+#Step 6- Backup and upload manually to S3
+#remote-host will connect to the db host and extract a backup
+
+docker exec -ti remote-host bash
+
+#Remark1: In mysqldump 8, you have to add flag --column-statistics=0. The command will be something like:
+mysqldump --column-statistics=0 --host=<server> --user=<user> --password=<password> 
+
+#Remark2: You have to specify the host 'db_host' with option -h / It comes from the docker-compose file 
+
+>mysqldump -u root -h db_host -p testdb --column-statistics=0  > /tmp/db.sql
+exit
+
+# upload to aws - Use of aws environment variables
+#use keys and ID from the IAM credentials csv file
+
+[root@55a58dbeb260 tmp]# export AWS_ACCESS_KEY_ID=AKIATCFW3H3VB4ENRKF6
+[root@55a58dbeb260 tmp]# export AWS_SECRET_ACCESS_KEY=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
+
+# Upload the file to aws s3 - From tmp folder
+aws s3 cp db.sql s3://jenkins-mysql-backup-mehdi/db.sql --debug
+
+----
+Step 7 - Use ssh script to backup and upload (Automation)
+----
+#/bin/bash
+
+DB_HOST=$1
+DB_PASSWORD=$2
+DB_NAME=$3
+
+mysqldump -u root -h $DB_HOST -p$DB_PASSWORD $DB_NAME --column-statistics=0  > /tmp/db.sql
+
+----------
+#7.1 - give rights to the folder + file
+chmod +x /tmp/script.sh
+
+# run this command from /
+/tmp/script.ssh db_host 1234 testdb
+
+# update script shell to use db name with date
+---------
+#/bin/bash
+
+DATE=$(date +%H-%M-%S)
+DB_HOST=$1
+DB_PASSWORD=$2
+DB_NAME=$3
+
+mysqldump -u root -h $DB_HOST -p$DB_PASSWORD $DB_NAME --column-statistics=0  > /tmp/db-$DATE.sql
+
+----------------
+
+# Add aws cli paramters to you script shell
+# update script shell
+------------
+
+#/bin/bash
+
+DATE=$(date +%H-%M-%S)
+BACKUP=db-$DATE.sql
+
+DB_HOST=$1
+DB_PASSWORD=$2
+DB_NAME=$3
+AWS_SECRET=$4
+BUCKET_NAME=$5
+
+mysqldump -u root -h $DB_HOST -p$DB_PASSWORD $DB_NAME --column-statistics=0  > /tmp/$BACKUP && \
+export AWS_ACCESS_KEY_ID=AKIATCFW3H3VB4ENRKF6 && export AWS_SECRET_ACCESS_KEY=$AWS_SECRET && \
+
+echo "uploading you $BACKUP backup" && \
+aws s3 cp /tmp/$BACKUP s3://$BUCKET_NAME/$BACKUP
+
+--------------------
+/tmp/script.sh db_host 1234 testdb 0e/2MtvNuDBmjkG5BjoW05ozW98JAfFuhPCCd2pU jenkins-mysql-backup-mehdi/db.sql
+--------------------
+
+# Step 8 - add on jenkins mysql pwd and aws secret key / OK
+# Step 9 - Create a Jenkins job to upload your DB to AWS / OK
+# Step 10 - Persist the script on the remote host
+  # update your docker-compose.yml to add a volume for the script
+	----------------
+	---
+networks:
+  net: ~
+services:
+  db_host:
+    container_name: db
+    environment:
+      - MYSQL_ROOT_PASSWORD=1234
+    image: "mysql:5.7"
+    networks:
+      - net
+    volumes:
+      - "$PWD/db_data:/var/lib/mysql"
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins
+    networks:
+      - net
+    ports:
+      - "8080:8080"
+    volumes:
+      - "$PWD/jenkins_home:/var/jenkins_home"
+  remote_host:
+    build:
+      context: centos7
+    volumes:
+      - "$PWD/aws-s3.sh:/tmp/script.sh"
+    container_name: remote-host
+    image: remote-host
+    networks:
+      - net
+version: "3"
+	
+	------------------
+
+# delete container and recreate it - login in again iside container to verify it is there
+
+docker rm -fv remote-host
+docker-compose up -d
+docker exec -ti remote-host bash
+
+# you need to set the permissions again
+chmod +x /tmp/script.sh
+
+--------------
+# Step 11 - Reuse your Job to upload different DB's to different buckets
+# create a new db test2  
+>mysql -u root -h db_host -p1234
+mysql> create database test2;
+
+# Create a new bucket in amazon (jenkins-mysql-backup-mehdi-2)
+
+# Run Jenkins job with the new parameters OK
