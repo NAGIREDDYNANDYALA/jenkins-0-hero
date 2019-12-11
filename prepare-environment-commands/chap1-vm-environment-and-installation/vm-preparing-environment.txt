@@ -23,6 +23,7 @@ ifconfig
 
 #ssh from your machine host
 ssh jenkins@192.168.10.38
+password jenkins
 
 #install docker
 

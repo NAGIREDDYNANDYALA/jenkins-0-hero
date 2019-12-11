@@ -1,1 +1,525 @@
 # Step 1
+
+#Update docker-compose. Change the jenkins image, instead of downloading jenkins/jenkins, we will create our own on trop
+------------------------
+---
+networks:
+  net: ~
+services:
+  db_host:
+    container_name: db
+    environment:
+      - MYSQL_ROOT_PASSWORD=1234
+    image: "mysql:5.7"
+    networks:
+      - net
+    volumes:
+      - "$PWD/db_data:/var/lib/mysql"
+  jenkins:
+    container_name: jenkins
+    image: jenkins-ansible
+    build:
+      context: jenkins-ansible
+    networks:
+      - net
+    ports:
+      - "8080:8080"
+    volumes:
+      - "$PWD/jenkins_home:/var/jenkins_home"
+  remote_host:
+    build:
+      context: centos7
+    volumes:
+      - "$PWD/aws-s3.sh:/tmp/script.sh"
+    container_name: remote-host
+    image: remote-host
+    networks:
+      - net
+version: "3"
+
+---------------------
+# we create a new dockerFile - Create a new folder jenkins-data/jenkins-ansible
+
+FROM jenkins/jenkins:lts
+
+# if we want to install via apt
+USER root
+
+RUN apt-get update && apt-get install -y && \
+    apt-get -y install python3-pip && \
+    pip3 install ansible --upgrade
+
+
+# drop back to the regular jenkins user - good practice
+USER jenkins
+
+--------------------------
+
+#Step 2 - Make the ssh keys permanent on the Jenkins container
+#Share files between container and host
+
+#create a folder inside host: 
+mkdir jenkins_home/ansible
+
+#copy remote-key inside jenkins_home/ansible
+cp centos7/remote-key jenkins_home/ansible/
+
+----
+
+
+#Step 3 - Create a simple Ansible Inventory
+
+#copy remote-key inside ansible folder in host
+
+[jenkins@localhost centos7]$ cp remote-key ../jenkins-ansible/
+
+#create a new file 'hosts' - This is where we define all our hosts
+
+--------------
+[all:vars]
+
+ansible_connection = ssh
+
+[test]
+
+test1 remote_host=remote_host
+ansible_user=remote_user
+ansible_private_key_file=/var/jenkins_home/ansible/remote-key
+-------------
+
+#copy the file to the container, using cp and the volume folder
+cp hosts ../jenkins_home/ansible/
+
+#connect to your remote_host container and test your ansible file from /var/jenkins_home/ansible
+
+ansible -i hosts -m ping test1
+
+
+test1 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/libexec/platform-python"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+
+----
+#Step 4 - Create your first Ansible Playbook - play.yml
+
+-------------------
+- hosts: test1
+  tasks:
+          - shell: echo Hello World > /tmp/ansible-file
+--------------------
+#copy file to volume so it will be stored and shared
+cp ../jenkins_home/ansible/play.yml .
+
+
+#run it
+>ansible-playbook -i hosts play.yml
+
+#result success
+>>> test1                      : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+
+
+# Remark the 'Hello' world was created in remote-host container, because of the '- hosts: test1' that refers to remote-host
+
+# Modify play,yml and copy it to the jenkins_home volume
+-------------------
+- hosts: test1
+  tasks:
+          - shell: echo Hello World from Ansible> /tmp/ansible-file
+--------------------
+cp play.yml ../jenkins_home/ansible/
+
+>>> You will see 
+
+changed: [test1]
+------------
+# -	Step 5 - Integrate Ansible and Jenkins (Ansible Plugin)
+# --> create a jenkins job. specify playbook.yml and hosts file (inventory)
+
+# Step 6 - Power up! Add parameters to Ansible and Jenkins
+
+change file in jenkins_home/ansible/play.yml and add a debug section with a variable MSG
+------------------
+- hosts: test1
+  tasks:
+    - debug:
+         msg: "{{ MSG }}"
+------------------
+
+- Add a paramter in Jenkins
+- Changethe build sections, add key
+
+-----------
+Step 7 -  Missing the colors Colorize your playbooks' output
+
+--------
+>docker exec -ti jenkins bash
+>cd ~/ansible/
+>ansible-playbook -i hosts play.yml --> you will see colors
+-----
+Install Ansicolor plugin in Jenkins to see colors in Jenkins
+You should configure the jenkins job config anc use checkboxes for stdout
+
+------------------------
+
+
+Step 8 - Challenge Jenkins + Ansible + MySQL + PHP + NGINX + Shell Scripting
+ -- Step8.1 Create the DB that will hold all the users
+ 
+  - go to db container 
+	$docker exec -ti db bash
+	>mysql -u root -p
+		>1234
+	> show databases;
+    > create database people;	
+	> use people;
+	> create TABLE register (id int(3), name varchar(50), lastname varchar(50), age int(3));
+	> show tables;
+	> desc register;
++----------+-------------+------+-----+---------+-------+
+| Field    | Type        | Null | Key | Default | Extra |
++----------+-------------+------+-----+---------+-------+
+| id       | int(3)      | YES  |     | NULL    |       |
+| name     | varchar(50) | YES  |     | NULL    |       |
+| lastname | varchar(50) | YES  |     | NULL    |       |
+| age      | int(3)      | YES  |     | NULL    |       |
++----------+-------------+------+-----+---------+-------+
+4 rows in set (0.00 sec)
+
+ -- step8.2 Create a Bash Script to feed your DB - I
+  - Create at /home/jenkins/jenkins_data/jenkins-ansible a file called people.txt with random names.
+  - Create a script push.sh
+  - use command to print name 
+    > nl people.txt | grep -w 1 | awk '{print $2}' | awk -F ',' '{print $2}'
+	> use this command in script to extract lastname and first name
+	---------------------
+	#!/bin/bash
+
+		counter=0
+
+		while [ $counter -lt 12 ]; do
+			let counter=counter+1;
+
+			name=$(nl people.txt | grep -w $counter | awk '{print $2}' | awk -F ',' '{print $1}')
+			lastname=$(nl people.txt | grep -w $counter | awk '{print $2}' | awk -F ',' '{print $2}')
+			age=$(shuf -i 20-25 -n 1)
+
+
+		   mysql -u root -p1234 -e "insert into register values ($counter. '$name', '$lastname', '$age')"
+		   echo "$counter, $bname, $lastname, $age was correctly imported"
+
+		done
+			
+	----------------------
+	
+	
+	- Generate random number
+	[jenkins@localhost jenkins-ansible]$ shuf -i 20-25
+			20
+			25
+			24
+			21
+			23
+			22
+			
+			
+   - Step 9 - Test script	
+      - Copy to db container
+	   - Copy files to container
+		  >docker cp push.sh db:/tmp/ansible-file
+		  >docker cp people.txt db:/tmp/
+	  > docker exec -ti db bash
+	  - run script 
+	  > bash push.sh
+	  > connect to mysql people, table register
+	  > select * from register
+	  mysql> select * from register
+    -> ;
+		+------+------------+------------+------+
+		| id   | name       | lastname   | age  |
+		+------+------------+------------+------+
+		|    1 | Mauno      | Jemima     |   22 |
+		|    2 | Janetta    | Radovan    |   22 |
+		|    3 | Jaylin     | Waman      |   20 |
+		|    4 | Alexandria | Perce      |   20 |
+		|    5 | Zeno       | Ragnheiðr |   25 |
+		|    6 | Merle      | Araujo     |   22 |
+		|    7 | Eseoghene  | Chibueze   |   22 |
+		|    8 | Josephson  | Cyrille    |   22 |
+		|    9 | Phuntsok   | Marić     |   20 |
+		|   10 | Khorshid   | Nrcisse    |   23 |
+		|   11 | Noomen     | Sunan      |   23 |
+		|   12 | Nzinga     | Sullivan   |   22 |
+		+------+------------+------------+------+
+		12 rows in set (0.00 sec)
+		
+		
+ ------------
+ step 10 -Start building a Docker Nginx Web Server + PHP - I
+ 
+  - First create a folder 'web' inside /home/jenkins/jenkins_data/jenkins-ansible/
+	- inside 'web' create two subfolders and a Docekrfile: 
+	    -Dockerfile
+		-bin/start.sh
+		-conf/nginx.conf
+			  nginx.repo	
+			  
+			 	  	
+	Dockerfile explanation:
+	
+  - FROM remote-host inside the new file means that we will have the content of the Dockerfile of the remote-host image
+  inside our new Dockerfile and new web container
+  
+  - copy from inetrnet nginx.repo  : We are enabling the package repo so we can download from there
+     in /home/jenkins/jenkins_data/jenkins-ansible/.conf/nginx.repo 
+  
+  - Google how to install nginx in centos7
+  - We are creating volumes in case container dies, we will have these data secure  
+  - copy and modify later a file from 
+    https://www.digitalocean.com/community/tutorials/how-to-host-multiple-websites-securely-with-nginx-and-php-fpm-on-ubuntu-14-04#step-3-%E2%80%94-testing
+	
+	- create nginx.conf inside conf folder
+	
+Files : 
+------start.sh------
+#!/bin/bash
+
+# Starts ssh
+
+/usr/sbin/sshd
+
+#Starts php process in background
+
+/usr/sbin/php-fpm -c /etc/php/fpm
+
+# Starts nginx daemon
+
+nginx -g 'daemon off;'
+---------- nginx.repo--------------   
+ [nginx-stable]
+name=nginx stable repo
+baseurl=http://nginx.org/packages/centos/$releasever/$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://nginx.org/keys/nginx_signing.key
+module_hotfixes=true
+------------nginx.conf---------------------
+server {
+    listen 8085;
+    server_name jenkins.local;
+    root /var/www/html;
+    index index.php;
+    access_log /var/log/nginx/localhost-access.log;
+    error_log /var/log/nginx/localhost-error.log;
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    location ~ \.php$ {
+        try_files $uri =404;
+        include /etc/nginx/fastcgi_params;
+        fastcgi_pass 127.0.0.1:9000;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $fastcgi_script_name;
+        fastcgi_intercept_errors on;
+    }
+}
+----------Dockerfile-----------
+
+FROM remote-host
+
+COPY ./conf/nginx.repo /etc/yum.repos.d/nginx.repo
+
+RUN  yum -y update && yum -y install nginx && \
+     yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm && \
+     yum -y install https://rpms.remirepo.net/enterprise/remi-release-8.rpm && \
+     dnf -y install dnf-utils && \
+     dnf -y update && \
+     yum -y module enable php:remi-7.4  && \
+     dnf -y install php php-cli php-common
+
+EXPOSE 8085 443
+
+VOLUME /var/www/html /var/log/nginx /var/log/php-fpm /var/lib/php-fpm
+
+COPY ./conf/nginx.conf /etc/nginx/conf.d/default.conf
+
+COPY ./bin/start.sh /start.sh
+
+RUN chmod +x /start.sh
+
+CMD /start.sh
+
+---------------------
+REMARK: We are using FROM remote-host
+remote-host is based on centos 8
+
+1  - Install nginx
+
+Step 1. Prepare your system
+First things first. You have to upgrade your RHEL / CentOS 8 to the latest release:
+>dnf -y upgrade
+
+Step 2. Setup RPM repository
+Latest stable NGINX can be found in GetPageSpeed
+GetPageSpeed repository holds many dynamic NGINX modules. So you can install both the base nginx package as well as all the amazing modules for it.
+
+>sudo dnf -y install https://extras.getpagespeed.com/release-el8-latest.rpm
+
+Step 3. Install NGINX
+Install NGINX with:
+>sudo dnf -y --disablerepo=rhel-8-for-x86_64-appstream-rpms install nginx
+
+Step 4.Run NGINX
+Now we are ready to run NGINX:
+> systemctl start nginx
+
+
+And don’t forget to enable it at boot time:
+>systemctl enable nginx
+
+2 - install php
+
+https://www.tecmint.com/install-php-on-centos-8/
+
+
+-----
+
+---
+networks:
+  net: ~
+services:
+  db_host:
+    container_name: db
+    environment:
+      - MYSQL_ROOT_PASSWORD=1234
+    image: "mysql:5.7"
+    networks:
+      - net
+    volumes:
+      - "$PWD/db_data:/var/lib/mysql"
+  jenkins:
+    container_name: jenkins
+    image: jenkins-ansible
+    build:
+      context: jenkins-ansible
+    networks:
+      - net
+    ports:
+      - "8080:8080"
+    volumes:
+      - "$PWD/jenkins_home:/var/jenkins_home"
+  remote_host:
+    build:
+      context: centos7
+    volumes:
+      - "$PWD/aws-s3.sh:/tmp/script.sh"
+    container_name: remote-host
+    image: remote-host
+    networks:
+      - net
+  web:
+    container_name: web
+    image: ansible-web
+    build:
+      context: jenkins-ansible/web
+    ports:
+      - "8085:80"
+    networks:
+      - net
+version: "3"
+-----------------------
+
+ Setup up index page of nginx
+  - Look on google 
+  https://www.php.net/manual/en/function.phpinfo.php
+
+//Create an index page
+/exec inside the web container
+>docker exec -ti web bash
+> cd /var/www/html
+ create index.php and copy this
+ 
+   -----------
+  
+<?php
+
+// Show all information, defaults to INFO_ALL
+phpinfo();
+
+// Show just the module information.
+// phpinfo(8) yields identical results.
+//phpinfo(INFO_MODULES);
+
+?>
+------
+
+
+>docker-compose build
+>docker-compose up -d
+
+
+-------------------------
+
+ step 11 -Build a table using HTML, CSS and PHP to display users
+ 
+  - create php file with html table to show the list from db
+  
+  ------------table.j2-----------
+  <!DOCTYPE html>
+<html>
+<head>
+ <title>Table with database</title>
+ <style>
+  table {
+   border-collapse: collapse;
+   width: 100%;
+   color: #588c7e;
+   font-family: monospace;
+   font-size: 25px;
+   text-align: left;
+     }
+  th {
+   background-color: #588c7e;
+   color: white;
+    }
+  tr:nth-child(even) {background-color: #f2f2f2}
+ </style>
+</head>
+<body>
+ <table>
+ <tr>
+  <th>id</th>
+  <th>name</th>
+  <th>lastname</th>
+  <th>age</th>
+ </tr>
+ <?php
+  $conn = mysqli_connect("db", "root", "1234", "people");
+  // Check connection
+  if ($conn->connect_error) {
+   die("Connection failed: " . $conn->connect_error);
+  }
+  $sql = "SELECT id, name, lastname, age FROM register {% if PEOPLE_AGE is defined %} where age = {{ PEOPLE_AGE }} {% endif %}";
+  $result = $conn->query($sql);
+  if ($result->num_rows > 0) {
+   // output data of each row
+   while($row = $result->fetch_assoc()) {
+    echo "<tr><td>" . $row["id"]. "</td><td>" . $row["name"] . "</td><td>"
+. $row["lastname"]. "</td><td>" . $row["age"]. "</td></tr>";
+  }
+    echo "</table>";
+  } else { echo "0 results"; }
+  $conn->close();
+?>
+</table>
+</body>
+</html>
+  ---------------------------
+   - copy it to container instead of index.php
+  >docker cp table.j2 web:/var/www/html/index.php
